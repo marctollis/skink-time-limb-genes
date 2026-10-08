@@ -2,7 +2,7 @@
 source "$(dirname -- "${BASH_SOURCE[0]}")/common.sh"
 need macse
 need python
-input="$GENEDIR/${GENE}_longest_refseq.fasta"
+input="$GENEDIR/${GENE}_longest_cds.fasta"
 [[ -s "$input" ]] || die 'Run step 02 first.'
 [[ ! -e "$GENEDIR/alignment" ]] || die 'alignment already exists. Move it aside before rerunning.'
 python "$ROOT/scripts/pipeline.py" check "$input" 2

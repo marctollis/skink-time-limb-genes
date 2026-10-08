@@ -1,5 +1,7 @@
+# Optional reference panel: retrieval searches RefSeq across all Lepidosauria.
+# This file no longer limits downloads.
 # Starter training panel, not a recovered list from the earlier chat.
-# One scientific species name per line. Edit before downloading.
+# One scientific species name per line, for teaching/reference only.
 # Preferred outgroup (if a CDS is available):
 Sphenodon punctatus
 Anolis carolinensis

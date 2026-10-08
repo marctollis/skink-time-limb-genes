@@ -5,9 +5,8 @@ channels:
   - nodefaults
 dependencies:
   - python=3.11
-  - ncbi-datasets-cli=18
+  - biopython=1.85
   - seqkit=2.8.2
   - macse=2.07
   - openjdk=17
   - iqtree=2.3.6
-  - unzip=6.0

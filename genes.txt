@@ -1,0 +1,3 @@
+# One gene symbol per line. Replace this example with your chosen limb genes.
+# Blank lines and comments are allowed. Symbols normalize to uppercase.
+SHH
