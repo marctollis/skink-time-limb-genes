@@ -1,6 +1,6 @@
 # SKINK TIME limb-gene training pipeline
 
-A small teaching workflow for Nick: **choose gene → choose species → download
+A small teaching workflow: **choose gene → choose species → download
 CDS → select one sequence per species → align → build and inspect a gene tree**.
 Run one gene at a time. This is a training pipeline, not an orthology or selection
 analysis. Longest CDS selection does not establish orthology or identify the
