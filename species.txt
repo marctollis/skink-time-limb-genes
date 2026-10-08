@@ -1,0 +1,13 @@
+# Starter training panel, not a recovered list from the earlier chat.
+# One scientific species name per line. Edit before downloading.
+# Preferred outgroup (if a CDS is available):
+Sphenodon punctatus
+Anolis carolinensis
+Pogona vitticeps
+Gekko japonicus
+Eublepharis macularius
+Lacerta agilis
+Podarcis muralis
+Scincus scincus
+Python bivittatus
+Thamnophis sirtalis

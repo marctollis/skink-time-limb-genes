@@ -1,0 +1,22 @@
+# All per-gene data and results are regenerated; keep only the placeholder.
+/genes/*
+!/genes/.gitkeep
+*.zip
+*.fasta
+*.fa
+*.fna
+*.faa
+*.fas
+*.aln
+*.phy
+*.treefile
+*.contree
+*.iqtree
+*.ufboot
+*.bionj
+*.mldist
+*.ckp.gz
+*.log
+__pycache__/
+*.pyc
+.DS_Store

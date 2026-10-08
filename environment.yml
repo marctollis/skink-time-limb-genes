@@ -1,0 +1,13 @@
+name: skink-time-limb-genes
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.11
+  - ncbi-datasets-cli=18
+  - seqkit=2.8.2
+  - macse=2.07
+  - openjdk=17
+  - iqtree=2.3.6
+  - unzip=6.0
