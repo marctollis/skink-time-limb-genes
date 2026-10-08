@@ -23,8 +23,7 @@ genes/.gitkeep
 ```
 
 The earlier conversation chose a hand-curated species list over a clade-wide
-download. The exact original list and script bodies were not available in the
-retrieved chat. `species.txt` is an explicitly labeled starter panel; replace or
+download. `species.txt` is an explicitly labeled starter panel; replace or
 extend it with the agreed taxa, especially focal skinks. Presence in this list
 does not guarantee an NCBI Gene annotation or CDS for a particular gene.
 
