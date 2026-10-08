@@ -1,33 +1,25 @@
 # SKINK TIME limb-gene training pipeline
 
-Interactive training pipeline: **gene → NCBI annotated CDS → one CDS per species
-→ MACSE alignment → IQ-TREE gene tree**.
+**Gene list → NCBI Datasets RefSeq CDS across Lepidosauria → longest eligible
+CDS per species → MACSE → IQ-TREE.** Lepidosauria includes squamates and tuatara.
 
-Provide gene symbols in **`genes.txt`**, then step 01 retrieves all matching
-**RefSeq** Nucleotide records across **Lepidosauria**, including squamates and
-tuatara. RefSeq predictions are included. There is no ten-species limit.
-`species.txt` is an optional reference panel and does not restrict downloads.
-Steps 02–04 still prompt for one gene at a time.
-
-“All” means all records returned by the annotated gene-symbol search, not every
-homolog in every genome. Unannotated genes and annotations under other symbols
-may be missed. This workflow downloads CDS-bearing source records; it does not
-use BLAST to recover genes. Longest CDS alone does not establish orthology.
+Step 01 processes `genes.txt` in a batch. Steps 02–04 prompt for one gene at a
+time so Nick can inspect sequence selection and alignment before building trees.
+`species.txt` is an optional reference panel; it does not restrict retrieval.
 
 ## Files
 
-- `scripts/01_download_cds.sh`: batch RefSeq Lepidosauria retrieval from `genes.txt`.
-- `scripts/02_extract_longest_refseq.sh`: annotated CDS extraction and selection.
-- `scripts/03_macse.sh`: raw and cleaned codon-aware alignments.
-- `scripts/04_build_tree.sh`: DNA model selection and gene tree inference.
-- `scripts/ncbi_cds.py`: retrieval, annotation parsing and provenance tables.
-- `scripts/pipeline.py`, `scripts/common.sh`: validation and shared prompts.
+- `genes.txt`: one gene symbol per line; SHH is a starter example.
+- `scripts/01_download_cds.sh`: downloads one Datasets package per listed gene.
+- `scripts/02_extract_longest_refseq.sh`: selects one eligible CDS per species.
+- `scripts/03_macse.sh`: aligns CDS and saves raw/cleaned alignments.
+- `scripts/04_build_tree.sh`: fits a DNA model and infers a gene tree.
+- `scripts/ncbi_cds.py`: package handling, selection and provenance.
+- `scripts/common.sh`, `scripts/pipeline.py`: prompts and validation.
 - `environment.yml`: software specification.
-- `genes.txt`: one gene symbol per line; starts with SHH as an example.
-- `species.txt`: optional reference panel, independent of retrieval.
-- `metadata/gene_tracking.tsv`: one manually reviewed row per gene.
-- `genes/.gitkeep`: placeholder; all generated gene directories are ignored.
-- `tests/test_pipeline.py`: offline checks with synthetic annotations/mock tools.
+- `metadata/gene_tracking.tsv`: one reviewed row per gene.
+- `genes/.gitkeep`: placeholder; generated gene directories are ignored.
+- `tests/test_pipeline.py`: offline checks.
 
 ## Create the environment in Monsoon scratch
 
@@ -68,8 +60,8 @@ installed base conda stays in its existing location. Repeat module loading,
 conda env update --prefix "$CONDA_ENVS_PATH/skink-time-limb-genes" --file environment.yml
 ```
 
-Biopython is now required. The previous Datasets CLI/unzip packages may remain
-installed but are no longer used. Version constraints are not a complete
+NCBI Datasets and Biopython are required. Python handles ZIP extraction;
+a separate unzip package is unnecessary. Version constraints are not a complete
 transitive dependency lock. After a successful Monsoon installation, save an
 exact Linux package snapshot:
 
@@ -83,177 +75,153 @@ conda list --explicit > metadata/conda-linux-64-explicit.txt
 Review the snapshot for private channel credentials before committing it.
 Back up scripts/specifications on GitHub so scratch environments can be rebuilt.
 
-## Download the gene list, then process each gene
+## Download the gene list
 
-Edit `genes.txt` with your chosen symbols, one per line. The supplied `SHH` is
-an example, not an assumed final limb-gene panel. Blank lines and `#` comments
-are allowed. Symbols normalize to uppercase; duplicates and unsafe symbols fail
-before any network requests. Every gene keeps its own `genes/GENE/` directory.
-
-Set your NCBI contact email, then run the list downloader:
+Edit `genes.txt` with your chosen gene symbols, one per line. Blank lines and
+`#` comments are allowed. Symbols normalize to uppercase; invalid or duplicate
+symbols fail before any download. The initial SHH is an example, not an assumed
+final panel of limb genes.
 
 ```bash
-export NCBI_EMAIL='your-real-email@example.org'
 bash scripts/01_download_cds.sh
-# Optional alternative list:
+# Or use a different list:
 # bash scripts/01_download_cds.sh /path/to/my_genes.txt
 ```
 
-Step 01 prompts for email if unset, but does not ask for a single gene. It runs
-sequentially through the list and writes `genes/download_batch_status.tsv`.
-A failed/zero-result gene is recorded while later genes are still attempted;
-the batch exits with an error if any failed. Complete matching downloads are
-skipped on rerun. Incomplete or older-scope directories must be moved aside
-before retrying that gene. The list itself never chooses a preferred species.
+**No email prompt, E-utilities client or NCBI login is used.** For each gene,
+the downloader runs the equivalent of:
 
-An optional `NCBI_API_KEY` environment variable is supported. Neither the key
-nor contact email is saved in run metadata. Biopython handles NCBI request pacing
-and transient retries. Do not run many download processes simultaneously:
-NCBI rate limits can apply across a shared IP address.
+```bash
+datasets download gene symbol SHH --taxon Lepidosauria \
+  --include cds,product-report \
+  --filename genes/SHH/downloads/SHH_lepidosauria.zip
+```
 
-For each downloaded gene, run step 02 and enter its symbol:
+Saves the ZIP, extracted package and download log in `genes/GENE/downloads/`.
+The package includes `ncbi_dataset/data/cds.fna`, `data_report.jsonl`, and product
+metadata. `download_manifest.json` records the command, date, CDS count, metadata
+count and file hashes; completion requires a valid ZIP, parseable report and at
+least one CDS record. It keeps all downloaded isoforms; selection happens later.
+There is no manually imposed species cap or result-count truncation.
+
+`genes/download_batch_status.tsv` records each gene's result. A failure or
+zero-CDS package is recorded while later genes are still attempted. The batch
+exits with an error if any gene failed. Matching complete downloads with verified
+file hashes are skipped on rerun. Move incomplete/old-scope gene directories aside
+before retrying; automated partial-download resume is not provided.
+
+“All available” means the CDS returned by Datasets for matching gene symbols
+within Lepidosauria, including predicted RefSeq transcripts. This is not a BLAST
+search for every homolog. Missing annotations, different names or species without
+available RefSeq CDS can limit coverage. Check `download.log` when results are
+unexpected. Symbol queries can match synonyms and do not establish orthology.
+
+## Process one gene at a time
 
 ```bash
 bash scripts/02_extract_longest_refseq.sh
+# Enter SHH, then inspect genes/SHH/candidate_cds.tsv and selection.tsv.
 ```
 
-Inspect `genes/SHH/candidate_cds.tsv` and `genes/SHH/selection.tsv`, then run these
-inside a Monsoon compute allocation using your lab's current Slurm instructions:
+Step 02 parses the Datasets CDS headers and joins them to the gene report by
+GeneID. Uses metadata/header organism names, groups subspecies under the species
+binomial, and retains original names/accessions. Requires an NM_/XM_ RefSeq
+coding-transcript accession, matching gene symbol or documented report synonym,
+consistent species metadata and a protein-coding gene record where supplied.
+Unresolved species, invalid/uninformative sequences, lengths not divisible by
+three and internal stops are excluded and documented. If multiple eligible
+GeneIDs remain for one species, that species is excluded for manual review.
+Ambiguous bases, missing terminal stops, non-ATG starts and synonym matches are
+flagged for review. FASTA CDS does not expose all GenBank feature quality flags;
+these checks do not guarantee completeness or correct annotation.
+
+Among eligible isoforms, longest CDS wins; accession/header breaks ties. There
+is no curated-NM_ preference over a longer predicted XM_ transcript. Writes:
+
+- `candidate_cds.tsv`: every downloaded CDS, species, taxid, transcript accession,
+  GeneID, symbol, length, original header, eligibility and notes.
+- `selection.tsv`: selected candidate for each included species.
+- `extraction_summary.json`: CDS and species counts.
+- `GENE_longest_cds.fasta`: one selected sequence per species, with Species_name labels.
+
+Inspect lengths, isoforms, exclusions and coverage before alignment. The CDS are
+already extracted by Datasets; introns are not passed to MACSE. Longest selection
+and mechanical checks do not verify orthology or the preferred biological isoform.
+Metadata/schema changes cause missing or mismatched records to be excluded rather
+than silently guessed.
+
+Inside a Monsoon compute allocation, run:
 
 ```bash
 bash scripts/03_macse.sh
+# Inspect alignment and logs before proceeding.
 bash scripts/04_build_tree.sh
 ```
 
-Do not run alignment/tree inference on a login node. Step 04 uses
-`SLURM_CPUS_PER_TASK`, or one thread if unset. For jobs, supply the gene on stdin:
-`printf 'SHH\n' | bash scripts/03_macse.sh` (likewise for step 04).
+Use your lab's current Slurm allocation instructions; do not run alignment/tree
+inference on a login node. Step 04 uses `SLURM_CPUS_PER_TASK`, or one thread if
+unset. For a job, `printf 'SHH\n' | bash scripts/03_macse.sh` supplies the symbol;
+likewise for step 04.
 
-### 01: retrieve all matching Nucleotide records
+MACSE requires at least two sequences and saves raw nucleotide/amino-acid
+alignments and logs under `alignment/`. Export masks internal/terminal stop
+codons and internal frameshift codons with NNN, and remaining frameshift
+characters with a gap. Inspect raw !/* characters and logs. Cleaned alignments
+must have equal lengths divisible by three; masking is not biological validation.
 
-Uses NCBI ESearch/EFetch with a query such as:
+IQ-TREE requires at least four species. Fits a DNA model with ModelFinder,
+1,000 ultrafast bootstrap and SH-aLRT replicates, seed 12345, and results under
+`iqtree/`. Inspect `GENE.treefile`. Trees are unrooted; root on Sphenodon_punctatus
+in a viewer if present and appropriate. Gene trees may differ from species trees;
+outputs are not automatically approved for HyPhy or codon-model analyses.
 
-```text
-("SHH"[Gene Name]) AND Lepidosauria[Organism] AND srcdb_refseq[PROP]
-```
+Stages refuse to overwrite outputs. **Old E-utilities/species-list/GenBank runs
+are incompatible with these Datasets packages.** Move old `genes/GENE/` directories
+outside the checkout before downloading that gene fresh. The unchanged steps
+03–04 expect `GENE_longest_cds.fasta` and the existing cleaned-alignment layout.
 
-Retrieves all search results through server history in batches of 20, saving
-GenBank-format records under `genes/GENE/downloads/`. `download_manifest.json`
-records the query, translated query, UTC retrieval date, counts and batch files.
-Records may be transcripts, individual genomic sequences or annotated
-chromosomes. Large genomic records can make retrieval slow and disk-intensive.
-There is no fixed result-count truncation. Some records will have no matching
-usable CDS; download counts are **not species counts**.
+## Track and publish
 
-Each batch is parsed and its record count verified. The manifest is marked
-complete only when every batch succeeds. Incomplete downloads cannot proceed to
-extraction. A zero-result gene is reported as failed and later genes are still attempted. If interrupted or failed, move
-the incomplete gene directory aside and restart; automatic resume is not provided.
+Maintain one reviewed row per gene in `metadata/gene_tracking.tsv`.
+`species_requested` can be all_RefSeq_Lepidosauria; `species_downloaded` counts
+named species represented in candidates; `n_species_final` counts reviewed
+alignment taxa. Record alignment length, MACSE issues, relative tree path,
+obvious tree problems and exclusions. Keep accession/provenance tables with
+scratch outputs and summarize important findings in the tracked table.
 
-### 02: extract and select CDS from annotations
+Generated contents under `genes/`, except .gitkeep, are ignored. Do not commit
+ZIP packages, FASTAs, alignments or IQ-TREE outputs, or force-add generated files.
 
-Reads matching CDS feature `/gene` or `/gene_synonym` qualifiers, using exact
-case-insensitive symbol matches. A record-level search hit is insufficient:
-unrelated CDS on the same chromosome are not selected. Parses exon joins and
-reverse-strand locations using Biopython. Only named species within the target
-lineage are eligible; subspecies are grouped under the species binomial, while
-original organism names and source taxids remain in the tables.
-
-Writes:
-
-- `candidate_cds.tsv`: all matching CDS candidates, source/accessions, gene IDs,
-  feature location, eligibility, selection and exclusion/review notes.
-- `selection.tsv`: selected candidate for each included species.
-- `extraction_summary.json`: retrieved records, candidates and selected species,
-  including source counts and records without a matching CDS feature.
-- `GENE_longest_cds.fasta`: one sequence per species, labeled `Species_name`.
-
-Default selection excludes fuzzy/partial CDS annotations, noninitial reading
-frames, pseudogenes, remote feature locations requiring other records,
-translation exceptions, nonstandard genetic codes, invalid sequences, lengths
-not divisible by three and internal stop codons. These exclusions remain visible
-in the candidate table. Full gene sequences with introns are not aligned as CDS.
-Ambiguous bases, missing terminal stops and non-ATG starts are flagged for review.
-Excluded candidates may have a blank CDS length if extraction was not attempted.
-
-Only RefSeq candidates are eligible. Among them, longest CDS wins;
-accession/location breaks equal-length ties. RefSeq includes predicted XM_/XP_ records.
-Different GeneIDs within a species are flagged for review. **Eligible/selected
-means passed these mechanical checks, not verified orthology or completeness.**
-Check isoforms, paralogs, duplicate assemblies and unusual lengths. A simple gene
-name search can miss LOC-only annotations, alternative names, unannotated genomes
-and records outside the searched index. This pipeline does not promise every
-NCBI species or every deposited sequence for the gene.
-
-### 03: MACSE
-
-Requires at least two sequences. Saves original nucleotide/amino-acid alignments
-and logs under `alignment/`. MACSE export masks internal/terminal stop codons and
-internal frameshift codons with `NNN`, and remaining frameshift characters with
-`-`. Inspect raw `!`/`*` characters and logs; masking is not biological validation.
-The cleaned alignment must have equal sequence lengths divisible by three.
-
-### 04: IQ-TREE
-
-Requires at least four species. Uses a DNA model (`-st DNA`), ModelFinder (`-m
-MFP`), 1,000 ultrafast bootstrap and SH-aLRT replicates, and seed 12345. Outputs
-are under `iqtree/`; inspect `GENE.treefile`. Trees are unrooted; root using
-`Sphenodon_punctatus` in a viewer only if present and appropriate. A gene tree
-may differ from the species tree. Outputs are not automatically approved for
-HyPhy or codon-model analysis.
-
-Stages refuse to overwrite existing outputs. **Earlier species-list or GenBank-inclusive runs are incompatible
-with this RefSeq Lepidosauria scope.** Move old `genes/GENE/` directories
-outside the checkout if retaining them, then start fresh from step 01. Do not
-mix old/new runs or change the search scope between retrieval and extraction.
-
-## Tracking, updating and publishing
-
-Maintain one reviewed row per gene in `metadata/gene_tracking.tsv`. For this
-clade-wide version, `species_requested` can be `all_RefSeq_Lepidosauria`;
-`species_downloaded` counts distinct named species in matching candidate rows,
-and `n_species_final` counts taxa in the final reviewed alignment. Record alignment
-length, MACSE issues, relative tree path, tree problems and exclusions in notes.
-The generated provenance tables stay with the scratch results; summarize key
-findings in the tracked table.
-
-All per-gene content except `.gitkeep` is ignored. Do not commit downloaded NCBI
-records, FASTAs, alignments or IQ-TREE results, or force-add generated files.
-For a new checkout extracted from the source ZIP:
+To update an existing Monsoon checkout, transfer the latest source ZIP, extract
+it into a separate staging folder, and copy its source files into the checkout.
+Keep the checkout's `.git` directory and any customized `genes.txt` list.
+After updating the active conda environment and reviewing files:
 
 ```bash
-git init -b main
 git add README.md environment.yml genes.txt species.txt scripts tests metadata .gitignore genes/.gitkeep
 git diff --cached --stat
-git commit -m "Batch download RefSeq Lepidosauria CDS by gene list"
-git remote add origin https://github.com/YOUR-ACCOUNT/skink-time-limb-genes.git
-git push -u origin main
+git commit -m "Use NCBI Datasets for RefSeq Lepidosauria gene-list downloads"
+git push
 ```
 
-If transferring these updated files into your **existing** Monsoon checkout,
-keep that checkout's `.git` directory, replace only source files, then run the
-`git add`, review, commit and push commands above. Skip `git init` and
-`git remote add` when they are already configured. Do not extract under a nested
-`skink-time-limb-genes/skink-time-limb-genes` directory by accident.
+For a new checkout extracted from ZIP, first run `git init -b main`, then commit
+as above, set `git remote add origin https://github.com/YOUR-ACCOUNT/skink-time-limb-genes.git`
+and push with `git push -u origin main`.
 
-## Checks and documentation
+## Validation and documentation
 
-```bash
-python -m unittest discover -s tests -v
-```
+Run `python -m unittest discover -s tests -v`. Offline checks cover mocked
+Datasets commands/packages, source filtering, longest isoforms, tuatara grouping,
+ambiguous GeneIDs, failed/empty downloads, gene-list validation, completed-download
+skipping, package modification detection, alignment validation and stage
+orchestration with mock alignment/tree tools. Live Datasets retrieval, the Monsoon
+conda solve and actual MACSE/IQ-TREE inference still require verification there.
 
-Offline checks cover annotated GenBank/RefSeq CDS, exon joins, reverse strands,
-partial/pseudogene/paralog handling, gene-list validation and batch failure reporting,
-retrieval pagination/incomplete downloads,
-alignment validation, prompt/path behavior and stage orchestration with mock
-alignment/tree tools. No live NCBI retrieval, Monsoon conda solve or actual
-MACSE/IQ-TREE inference is claimed by local checks.
-
-- [NCBI Nucleotide sources](https://www.ncbi.nlm.nih.gov/books/NBK44863/)
-- [NCBI E-utilities](https://www.ncbi.nlm.nih.gov/books/NBK25499/)
-- [Biopython feature extraction](https://biopython.org/docs/latest/Tutorial/chapter_seq_annot.html)
+- [NCBI Datasets gene downloads](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/command-line/datasets/download/gene/datasets_download_gene_symbol/)
+- [Datasets package and CDS header format](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/data-packages/gene-package/)
+- [Gene report schema](https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/data-reports/gene/)
 - [Conda environment/cache locations](https://docs.conda.io/projects/conda/en/latest/user-guide/configuration/custom-env-and-pkg-locations.html)
-- [Monsoon modules](https://in.nau.edu/arc/installing-software-packages/)
+- [Monsoon software modules](https://in.nau.edu/arc/installing-software-packages/)
 - [Monsoon scratch storage](https://in.nau.edu/arc/overview/file-management/)
 - [MACSE documentation](https://www.agap-ge2pop.org/wp-content/uploads/macse/doc/doc_MACSE_v2.03.pdf)
 - [IQ-TREE tutorial](https://www.iqtree.org/doc/Tutorial)
