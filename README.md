@@ -93,8 +93,8 @@ normalized to uppercase and all paths are relative to the script location.
 ```bash
 bash scripts/01_download_cds.sh
 bash scripts/02_extract_longest_refseq.sh
-bash scripts/03_macse.sh
-bash scripts/04_build_tree.sh
+srun bash scripts/03_macse.sh
+srun bash scripts/04_build_tree.sh
 ```
 
 Run alignment and tree inference inside a Monsoon compute allocation, not on a
