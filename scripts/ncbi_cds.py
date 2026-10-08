@@ -3,6 +3,11 @@
 import csv
 import hashlib
 import json
+import os
+import time
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
 import re
 import subprocess
 import sys
@@ -14,7 +19,21 @@ from pathlib import Path
 from Bio.Seq import Seq
 from pipeline import fasta
 
-SCOPE = 'datasets_refseq_lepidosauria'
+SCOPE = 'datasets_refseq_squamata_gene_ids_v4'
+
+
+def normalize_report(value):
+    """Older CLI reports use snake_case; newer documentation uses camelCase."""
+    if isinstance(value, list):
+        return [normalize_report(item) for item in value]
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            parts = key.split('_')
+            normalized = parts[0] + ''.join(part[:1].upper() + part[1:] for part in parts[1:])
+            result[normalized] = normalize_report(item)
+        return result
+    return value
 
 
 def gene_list(path):
@@ -45,9 +64,14 @@ def download(directory, gene):
         raise ValueError('downloads already exists; move the old gene directory aside before restarting')
     dest.mkdir(parents=True)
     archive = dest / f'{gene}_lepidosauria.zip'
-    command = ['datasets', 'download', 'gene', 'symbol', gene, '--taxon', 'Lepidosauria',
+    ids, query = discover_gene_ids(gene)
+    ids_path = dest / 'gene_ids.txt'
+    ids_path.write_text(''.join(identifier + '\n' for identifier in ids))
+    command = ['datasets', 'download', 'gene', 'gene-id', '--inputfile', str(ids_path),
                '--include', 'cds,product-report', '--filename', str(archive)]
     manifest = dict(gene=gene, scope=SCOPE, complete=False, command=command,
+                    discovery_query=query, gene_id_count=len(ids),
+                    include_sphenodon=include_outgroup(),
                     retrieved_utc=datetime.now(timezone.utc).isoformat())
     manifest_path = directory / 'download_manifest.json'
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
@@ -71,7 +95,7 @@ def download(directory, gene):
     if not count:
         raise ValueError('Package contains no CDS sequences; inspect download.log and metadata')
     # Reading every JSON line detects truncated/malformed metadata before completion.
-    reports = [json.loads(line) for line in report.read_text().splitlines() if line.strip()]
+    reports = [normalize_report(json.loads(line)) for line in report.read_text().splitlines() if line.strip()]
     if not reports:
         raise ValueError('Empty gene report')
     manifest.update(complete=True, downloaded_cds_count=count, gene_report_count=len(reports),
@@ -81,6 +105,58 @@ def download(directory, gene):
     print(f'{gene}: downloaded {count} CDS records', flush=True)
 
 
+def search_gene(params):
+    params = dict(params, db='gene', tool='skink-time-limb-genes')
+    if os.environ.get('NCBI_EMAIL'):
+        params['email'] = os.environ['NCBI_EMAIL']
+    if os.environ.get('NCBI_API_KEY'):
+        params['api_key'] = os.environ['NCBI_API_KEY']
+    url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?' + urllib.parse.urlencode(params)
+    for attempt in range(3):
+        time.sleep(0.4)
+        try:
+            request = urllib.request.Request(url)
+            with urllib.request.urlopen(request, timeout=30) as handle:
+                root = ET.fromstring(handle.read())
+            errors = root.findall('.//ERROR') + root.findall('.//ErrorList/*')
+            if errors:
+                raise ValueError('NCBI Gene search error: ' + '; '.join(e.text or '' for e in errors))
+            return root
+        except (OSError, ET.ParseError):
+            if attempt == 2:
+                raise ValueError('NCBI Gene discovery failed after three attempts') from None
+            time.sleep(2 * (attempt + 1))
+
+
+def include_outgroup():
+    value = os.environ.get('SKINK_INCLUDE_OUTGROUP', '0')
+    if value not in ('0', '1'):
+        raise ValueError('SKINK_INCLUDE_OUTGROUP must be 0 or 1')
+    return value == '1'
+
+
+def discover_gene_ids(gene):
+    # Search genes directly across the clade; no species/taxonomy enumeration.
+    # RefSeq CDS identity is enforced from package accessions during step 02.
+    taxa = '(txid8509[Organism:exp] OR Sphenodon[Organism])' if include_outgroup() else 'txid8509[Organism:exp]'
+    query = f'"{gene}"[Gene Name] AND {taxa}'
+    first = search_gene(dict(term=query, retmax=1000, usehistory='y'))
+    count = int(first.findtext('Count', default='0'))
+    if not count:
+        raise ValueError(f'No matching NCBI Gene records for {gene} in Squamata/outgroup scope')
+    ids = [node.text for node in first.findall('./IdList/Id')]
+    for start in range(1000, count, 1000):
+        key, history = first.findtext('QueryKey'), first.findtext('WebEnv')
+        if not key or not history:
+            raise ValueError('Missing NCBI history needed to retrieve all Gene IDs')
+        page = search_gene(dict(term='#' + key, WebEnv=history, retstart=start, retmax=1000))
+        ids.extend(node.text for node in page.findall('./IdList/Id'))
+    if len(ids) != count or len(set(ids)) != count or not all(re.fullmatch(r'\d+', x or '') for x in ids):
+        raise ValueError('Incomplete or invalid Gene ID discovery; download stopped')
+    print(f'{gene}: found {len(ids)} matching Squamata/outgroup Gene IDs', flush=True)
+    return ids, query
+
+
 def completed(directory, gene):
     path = directory / 'download_manifest.json'
     if not path.exists():
@@ -88,7 +164,7 @@ def completed(directory, gene):
     manifest = json.loads(path.read_text())
     cds, report = package_files(directory)
     return (manifest.get('complete') and manifest.get('scope') == SCOPE
-            and manifest.get('gene') == gene and cds.is_file() and report.is_file()
+            and manifest.get('gene') == gene and manifest.get('include_sphenodon') == include_outgroup() and cds.is_file() and report.is_file()
             and hashlib.sha256(cds.read_bytes()).hexdigest() == manifest.get('cds_sha256')
             and hashlib.sha256(report.read_bytes()).hexdigest() == manifest.get('report_sha256'))
 
@@ -101,7 +177,7 @@ def download_list(root, path):
     for gene in genes:
         directory = root / 'genes' / gene
         directory.mkdir(exist_ok=True)
-        print(f'\nDownloading {gene}: RefSeq Lepidosauria CDS', flush=True)
+        print(f'\nDownloading {gene}: RefSeq squamate CDS', flush=True)
         try:
             if completed(directory, gene):
                 status, note = 'already_complete', 'Verified existing matching download'
@@ -140,10 +216,14 @@ def extract(directory, gene):
     if not completed(directory, gene):
         raise ValueError('Missing, incomplete, modified or old-scope package; run step 01 in a fresh gene directory')
     cds, report = package_files(directory)
-    reports = [json.loads(line) for line in report.read_text().splitlines() if line.strip()]
+    reports = [normalize_report(json.loads(line)) for line in report.read_text().splitlines() if line.strip()]
     metadata = {str(row['geneId']): row for row in reports}
     candidates, groups = [], defaultdict(list)
+    seen = set()
     for header, sequence in fasta(cds):
+        if (header, sequence) in seen:
+            continue
+        seen.add((header, sequence))
         attributes = dict(re.findall(r'\[([^=\]]+)=([^\]]*)\]', header))
         geneid = attributes.get('GeneID', '')
         info = metadata.get(geneid, {})
